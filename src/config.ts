@@ -26,6 +26,9 @@ export interface Config {
   aiVoice: string;
   aiTrigger: string | undefined;
   openaiApiKey: string | undefined;
+
+  // Locale
+  lang: string;
 }
 
 function getArgValue(args: string[], flag: string): string | undefined {
@@ -78,6 +81,9 @@ export function parseConfig(): Config {
     console.error("  --ai-system-prompt <p> System prompt for the AI");
     console.error("  --ai-voice <voice>     TTS voice (default: alloy)");
     console.error("  --ai-trigger <word>    Only respond when text contains this keyword");
+    console.error("");
+    console.error("Locale Options:");
+    console.error("  --lang <code>          Caption/browser language (default: ko-KR)");
     process.exit(1);
   }
 
@@ -132,5 +138,6 @@ export function parseConfig(): Config {
     aiVoice: getArgValue(args, "--ai-voice") ?? "alloy",
     aiTrigger: getArgValue(args, "--ai-trigger"),
     openaiApiKey,
+    lang: getArgValue(args, "--lang") ?? "ko-KR",
   };
 }

@@ -38,11 +38,13 @@ const TRANSCRIPTS_DIR = join(OPENUTTER_WORKSPACE_DIR, "transcripts");
 
 // ── Stealth script ──────────────────────────────────────────────────────
 
-const STEALTH_SCRIPT = `
+function buildStealthScript(lang: string): string {
+  const langShort = lang.split("-")[0] ?? lang;
+  return `
   Object.defineProperty(navigator, "webdriver", { get: () => false });
   if (!window.chrome) { window.chrome = { runtime: {} }; }
   Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
-  Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
+  Object.defineProperty(navigator, "languages", { get: () => ${JSON.stringify([lang, langShort, "en-US", "en"])} });
   var originalQuery = window.Permissions && window.Permissions.prototype && window.Permissions.prototype.query;
   if (originalQuery) {
     window.Permissions.prototype.query = function (params) {
@@ -59,6 +61,7 @@ const STEALTH_SCRIPT = `
     return getParameter.call(this, param);
   };
 `;
+}
 
 // ── Google Meet UI automation helpers ────────────────────────────────────
 
@@ -528,6 +531,7 @@ export async function runBot(config: Config): Promise<void> {
     aiVoice,
     aiTrigger,
     openaiApiKey,
+    lang,
   } = config;
 
   const noCamera = !camera;
@@ -573,6 +577,8 @@ export async function runBot(config: Config): Promise<void> {
   mkdirSync(userDataDir, { recursive: true });
 
   const hasAuth = !noAuth && existsSync(AUTH_FILE);
+  console.log(`  Language: ${lang}`);
+
   if (noAuth) {
     console.log("  Joining as guest (--anon)");
   } else if (hasAuth) {
@@ -617,6 +623,7 @@ export async function runBot(config: Config): Promise<void> {
       storageState: AUTH_FILE,
       viewport: { width: 1280, height: 720 },
       permissions: ["camera", "microphone"],
+      locale: lang,
       userAgent:
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     });
@@ -628,6 +635,7 @@ export async function runBot(config: Config): Promise<void> {
       ignoreDefaultArgs: ["--enable-automation"],
       viewport: { width: 1280, height: 720 },
       permissions: ["camera", "microphone"],
+      locale: lang,
       userAgent:
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     });
@@ -635,7 +643,7 @@ export async function runBot(config: Config): Promise<void> {
   }
 
   // Stealth patches
-  await context.addInitScript(STEALTH_SCRIPT);
+  await context.addInitScript(buildStealthScript(lang));
 
   // Set up virtual audio BEFORE navigating (if AI mode)
   if (aiEnabled) {
@@ -670,10 +678,11 @@ export async function runBot(config: Config): Promise<void> {
         currentContext = await browser.newContext({
           viewport: { width: 1280, height: 720 },
           permissions: ["camera", "microphone"],
+          locale: lang,
           userAgent:
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         });
-        await currentContext.addInitScript(STEALTH_SCRIPT);
+        await currentContext.addInitScript(buildStealthScript(lang));
         if (aiEnabled) {
           await setupVirtualAudio(currentContext);
         }
@@ -734,10 +743,11 @@ export async function runBot(config: Config): Promise<void> {
       currentContext = await browser.newContext({
         viewport: { width: 1280, height: 720 },
         permissions: ["camera", "microphone"],
+        locale: lang,
         userAgent:
           "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
       });
-      await currentContext.addInitScript(STEALTH_SCRIPT);
+      await currentContext.addInitScript(buildStealthScript(lang));
       if (aiEnabled) {
         await setupVirtualAudio(currentContext);
       }
@@ -790,13 +800,24 @@ export async function runBot(config: Config): Promise<void> {
     console.log("  AI responder and TTS engine initialized");
   }
 
+  // Flag to pause caption processing while AI is responding
+  let aiResponding = false;
+
   // Caption callback for AI processing
   const onCaption = aiEnabled
     ? (speaker: string, text: string) => {
         if (!aiResponder || !ttsEngine) return;
 
-        // Skip captions from the bot itself
-        if (speaker.toLowerCase() === botName.toLowerCase()) return;
+        // Skip captions from the bot itself (TTS audio shows as 'You' or 'Me' in Meet)
+        const speakerLower = speaker.toLowerCase();
+        if (
+          speakerLower === "you" ||
+          speakerLower === "me" ||
+          speakerLower === botName.toLowerCase()
+        ) return;
+
+        // Don't process new captions while AI is generating/speaking
+        if (aiResponding) return;
 
         // Queue AI processing to avoid overlapping responses
         aiProcessingQueue = aiProcessingQueue.then(async () => {
@@ -814,16 +835,22 @@ export async function runBot(config: Config): Promise<void> {
 
             console.log(`  [ai] Response: "${response.slice(0, 80)}${response.length > 80 ? "..." : ""}"`);
 
-            const audioBuffer = await ttsEngine!.synthesize(response, aiVoice);
-            if (verbose) {
-              console.log(`  [ai] TTS generated ${audioBuffer.length} bytes`);
-            }
+            aiResponding = true;
+            try {
+              const audioBuffer = await ttsEngine!.synthesize(response, aiVoice);
+              if (verbose) {
+                console.log(`  [ai] TTS generated ${audioBuffer.length} bytes`);
+              }
 
-            await injectAudio(currentPage, audioBuffer);
-            if (verbose) {
-              console.log("  [ai] Audio injected successfully");
+              await injectAudio(currentPage, audioBuffer);
+              if (verbose) {
+                console.log("  [ai] Audio injected successfully");
+              }
+            } finally {
+              aiResponding = false;
             }
           } catch (err) {
+            aiResponding = false;
             console.error(
               "  [ai] Pipeline error:",
               err instanceof Error ? err.message : String(err),
@@ -838,7 +865,7 @@ export async function runBot(config: Config): Promise<void> {
     currentPage,
     transcriptPath,
     verbose,
-    onCaption ? { onCaption } : undefined,
+    onCaption ? { onCaption, botName, debounceMs: 3000 } : { botName },
   );
 
   console.log(

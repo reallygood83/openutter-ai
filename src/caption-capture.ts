@@ -95,8 +95,12 @@ const CAPTION_OBSERVER_SCRIPT = `
 `;
 
 export interface CaptionCaptureOptions {
-  /** Called when a caption is finalized (speaker stopped talking for 5s) */
+  /** Called when a caption is finalized (speaker stopped talking for debounce period) */
   onCaption?: (speaker: string, text: string) => void;
+  /** Bot name — captions from 'You', 'Me', or botName are skipped */
+  botName?: string;
+  /** Debounce timeout in ms (default: 3000) */
+  debounceMs?: number;
 }
 
 export interface CaptionCaptureResult {
@@ -111,7 +115,7 @@ export interface CaptionCaptureResult {
 function normalizeForCompare(text: string): string {
   return text
     .toLowerCase()
-    .replace(/[^a-z0-9 ]/g, "")
+    .replace(/[^\p{L}\p{N} ]/gu, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -127,6 +131,8 @@ export async function setupCaptionCapture(
   options?: CaptionCaptureOptions,
 ): Promise<CaptionCaptureResult> {
   const onCaptionCallback = options?.onCaption;
+  const botName = options?.botName;
+  const debounceMs = options?.debounceMs ?? 3000;
 
   // Track the current in-progress caption per speaker
   const tracking = new Map<string, { text: string; ts: number; startTs: number }>();
@@ -189,6 +195,16 @@ export async function setupCaptionCapture(
 
   // Bridge browser -> Node.js
   await page.exposeFunction("__openutter_onCaption", (speaker: string, text: string) => {
+    // Skip self-captions (bot's TTS shows as 'You' or 'Me')
+    const speakerLower = speaker.toLowerCase();
+    if (
+      speakerLower === "you" ||
+      speakerLower === "me" ||
+      (botName && speakerLower === botName.toLowerCase())
+    ) {
+      return;
+    }
+
     const existing = tracking.get(speaker);
     const prevWritten = lastWritten.get(speaker) ?? "";
 
@@ -222,11 +238,11 @@ export async function setupCaptionCapture(
     tracking.set(speaker, { text, ts: Date.now(), startTs: Date.now() });
   });
 
-  // Periodically finalize stale captions (text unchanged for 5s)
+  // Periodically finalize stale captions (text unchanged for debounceMs)
   const settleInterval = setInterval(() => {
     const now = Date.now();
     for (const [speaker, data] of tracking.entries()) {
-      if (now - data.ts >= 5000) {
+      if (now - data.ts >= debounceMs) {
         finalizeCaption(speaker, data.text, data.startTs);
         tracking.delete(speaker);
       }
