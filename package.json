@@ -1,0 +1,25 @@
+{
+  "name": "openutter-ai",
+  "version": "2.0.0",
+  "description": "Google Meet AI conversation agent — join meetings, capture captions, and respond with AI",
+  "main": "dist/index.js",
+  "bin": {
+    "openutter-ai": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "openai": "^4.87.3",
+    "playwright-core": "^1.58.2",
+    "tsx": "^4.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.3"
+  },
+  "type": "module"
+}
